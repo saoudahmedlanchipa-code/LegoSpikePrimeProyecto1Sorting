@@ -43,3 +43,5 @@ while True:
 
 
 
+#pybricksdev run ble my_program.py
+#pybricksdev devices
