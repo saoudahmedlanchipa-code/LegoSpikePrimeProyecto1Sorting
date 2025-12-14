@@ -1,7 +1,3 @@
-
-
-
-
 from pybricks.hubs import PrimeHub
 from pybricks.pupdevices import Motor, ColorSensor
 from pybricks.parameters import Port, Color
@@ -43,5 +39,3 @@ while True:
 
 
 
-#pybricksdev run ble my_program.py
-#pybricksdev devices
