@@ -72,7 +72,7 @@ async def execute_command(hub: PybricksHubBLE, drive_cmd: str, log_cb=None):
 # -------------------- WORKER BLE -------------------- 
 
 class BLEWorker:
-    def _init_(self, log_queue: Queue):
+    def __init__(self, log_queue: Queue):
         self.loop = asyncio.new_event_loop()
         self.thread = threading.Thread(target=self._thread_main, daemon=True)
         self.queue = None
@@ -92,7 +92,7 @@ class BLEWorker:
     async def _runner(self):
         try:
             self.log("Buscando hub Bluetooth…")
-            device = await find_device("sp-1")
+            device = await find_device("SP----1")
             if not device:
                 self.log("No se encontró hub.")
                 return
@@ -139,7 +139,7 @@ class BLEWorker:
 # -------------------- GUI -------------------- 
 
 class LegoGUI:
-    def _init_(self, root: tk.Tk):
+    def __init__(self, root: tk.Tk):
         self.root = root
         self.root.title("Control Motor A – LEGO Pybricks")
         self.root.geometry("350x350")
@@ -241,5 +241,5 @@ def main():
     root.mainloop()
 
 
-if _name_ == '_main_':
+if __name__ == '__main__':
     main()
