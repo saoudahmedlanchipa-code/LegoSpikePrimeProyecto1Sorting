@@ -6,240 +6,216 @@ from queue import Queue, Empty
 import tkinter as tk
 from tkinter import ttk
 
-from pybricksdev.ble import find_device  # type: ignore
-from pybricksdev.connections.pybricks import PybricksHubBLE  # type: ignore
+from pybricksdev.ble import find_device
+from pybricksdev.connections.pybricks import PybricksHubBLE
 
 
-# -------------------- PROGRAMA ENVIADO AL HUB -------------------- 
+# ==================================================
+# PROGRAMA PYBRICKS
+# ==================================================
 
-def create_program(drive_cmd: str) -> str:
-    """
-    Código Pybricks para controlar SOLO el motor A.
-    """
+def create_program(cmd: str) -> str:
 
-    drive_commands = {
-        'run_forward': "motorA.run(800)",
-        'run_backward': "motorA.run(-800)",
-        'stop': "motorA.stop()",
-    }
-
-    drive_code = drive_commands.get(drive_cmd, "motorA.stop()")
-
-    wait_code = ""
-    if drive_cmd in ['run_forward', 'run_backward']:
-        wait_code = "wait(2000)"   # mantiene el motor encendido
-
-    program = f"""
+    base = """
 from pybricks.hubs import PrimeHub
 from pybricks.pupdevices import Motor
 from pybricks.parameters import Port
 from pybricks.tools import wait
 
 hub = PrimeHub()
-motorA = Motor(Port.A)
-
-{drive_code}
-{wait_code}
+motor_pos = Motor(Port.D)
+motor_emp = Motor(Port.A)
 """
-    return program
+
+    commands = {
+        "red": """
+print("COLOR:RED")
+motor_pos.run_target(1000, -35)
+motor_emp.run_angle(1000, -180)
+""",
+        "yellow": """
+print("COLOR:YELLOW")
+motor_pos.run_target(1000, -35)
+motor_emp.run_angle(1000, 180)
+""",
+        "green": """
+print("COLOR:GREEN")
+motor_pos.run_target(1000, 35)
+motor_emp.run_angle(1000, 180)
+""",
+        "blue": """
+print("COLOR:BLUE")
+motor_pos.run_target(1000, 35)
+motor_emp.run_angle(1000, -180)
+""",
+        "emp_up": "motor_emp.run_angle(1000, 180)",
+        "emp_down": "motor_emp.run_angle(1000, -180)",
+        "pos_right": "motor_pos.run_target(1000, 35)",
+        "pos_left": "motor_pos.run_target(1000, -35)",
+    }
+
+    if cmd in commands:
+        return base + commands[cmd] + "\nwait(100)"
+
+    if cmd == "stop":
+        return """
+from pybricks.pupdevices import Motor
+from pybricks.parameters import Port
+Motor(Port.D).stop()
+Motor(Port.A).stop()
+"""
+
+    return ""
 
 
-async def execute_command(hub: PybricksHubBLE, drive_cmd: str, log_cb=None):
-    program = create_program(drive_cmd)
-    
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False, encoding='utf-8') as tf:
-        tf.write(program)
-        temp_path = tf.name
+async def execute(hub, cmd, log):
+    program = create_program(cmd)
 
-    should_wait = drive_cmd not in ['stop']
+    with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False) as f:
+        f.write(program)
+        path = f.name
 
     try:
-        await hub.run(temp_path, wait=should_wait, print_output=False)
-        if log_cb:
-            log_cb(f"Ejecutado: {drive_cmd}")
-
+        await hub.run(path, wait=True)
+        log(f"Ejecutado: {cmd}")
     except Exception as e:
-        if log_cb:
-            log_cb(f"Error ejecutando comando: {e}")
-
+        log(f"Error: {e}")
     finally:
-        try:
-            os.unlink(temp_path)
-        except:
-            pass
+        os.remove(path)
 
 
-# -------------------- WORKER BLE -------------------- 
+# ==================================================
+# BLE WORKER
+# ==================================================
 
 class BLEWorker:
-    def __init__(self, log_queue: Queue):
+    def __init__(self, log_queue, status_cb):
         self.loop = asyncio.new_event_loop()
-        self.thread = threading.Thread(target=self._thread_main, daemon=True)
-        self.queue = None
-        self.hub = None
-        self.running = threading.Event()
-        self.log_queue = log_queue
-
-    def log(self, msg: str):
-        self.log_queue.put(msg)
-
-    def _thread_main(self):
-        asyncio.set_event_loop(self.loop)
         self.queue = asyncio.Queue()
-        self.loop.create_task(self._runner())
-        self.loop.run_forever()
+        self.log_queue = log_queue
+        self.status_cb = status_cb
+        self.thread = threading.Thread(target=self._run, daemon=True)
+        self.hub = None
 
-    async def _runner(self):
-        try:
-            self.log("Buscando hub Bluetooth…")
-            device = await find_device("SP----1")
-            if not device:
-                self.log("No se encontró hub.")
-                return
-
-            self.hub = PybricksHubBLE(device)
-            await self.hub.connect()
-            self.log("Conectado al Hub.")
-            self.running.set()
-
-            while True:
-                drive_cmd = await self.queue.get()
-                await execute_command(self.hub, drive_cmd, self.log)
-
-        except asyncio.CancelledError:
-            pass
-
-        except Exception as e:
-            self.log(f"Error en worker: {e}")
-
-        finally:
-            if self.hub:
-                try:
-                    await self.hub.disconnect()
-                    self.log("Hub desconectado.")
-                except Exception as e:
-                    self.log(f"Error al desconectar: {e}")
-            self.running.clear()
+    def log(self, msg):
+        self.log_queue.put(msg)
 
     def start(self):
         if not self.thread.is_alive():
             self.thread.start()
 
-    def stop(self):
-        if self.loop.is_running():
-            for task in asyncio.all_tasks(self.loop):
-                task.cancel()
-            self.loop.call_soon_threadsafe(self.loop.stop)
+    def send(self, cmd):
+        self.loop.call_soon_threadsafe(self.queue.put_nowait, cmd)
 
-    def send_command(self, cmd: str):
-        if self.loop.is_running() and self.queue is not None:
-            self.loop.call_soon_threadsafe(self.queue.put_nowait, cmd)
+    def _run(self):
+        asyncio.set_event_loop(self.loop)
+        self.loop.run_until_complete(self.main())
+
+    async def main(self):
+        self.log("Buscando Hub Bluetooth...")
+        device = await find_device("SP----1")
+
+        if not device:
+            self.log("No se encontró el Hub")
+            self.status_cb(False)
+            return
+
+        self.hub = PybricksHubBLE(device)
+        await self.hub.connect()
+        self.log("Conectado al Hub")
+        self.status_cb(True)
+
+        while True:
+            cmd = await self.queue.get()
+            await execute(self.hub, cmd, self.log)
 
 
-# -------------------- GUI -------------------- 
+# ==================================================
+# GUI
+# ==================================================
 
-class LegoGUI:
-    def __init__(self, root: tk.Tk):
+class App:
+    def __init__(self, root):
         self.root = root
-        self.root.title("Control Motor A – LEGO Pybricks")
-        self.root.geometry("350x350")
+        root.title("Control LEGO – Proyecto Final")
+        root.geometry("520x520")
 
-        self.log_queue = Queue()
-        self.worker = BLEWorker(self.log_queue)
+        self.logs = Queue()
+        self.worker = BLEWorker(self.logs, self.update_status)
 
-        self._build_ui()
-        self._poll_logs()
+        # ---------------- Estado conexión ----------------
+        ttk.Label(root, text="Estado de conexión").pack(pady=5)
+        self.status_panel = tk.Canvas(root, width=40, height=40)
+        self.status_panel.pack()
+        self.status_circle = self.status_panel.create_oval(5, 5, 35, 35, fill="red")
 
-    def _build_ui(self):
+        ttk.Button(root, text="Conectar", command=self.worker.start).pack(pady=5)
 
-        top = ttk.Frame(self.root, padding=10)
-        top.pack(fill='x')
+        # ---------------- Botones por color ----------------
+        frame = ttk.LabelFrame(root, text="Colores")
+        frame.pack(pady=10)
 
-        ttk.Button(top, text="Conectar", command=self.on_connect).pack(side='left', padx=5)
-        ttk.Button(top, text="Desconectar", command=self.on_disconnect).pack(side='left', padx=5)
+        ttk.Button(frame, text="🔴 ROJO", command=lambda: self.send_color("red")).grid(row=0, column=0, padx=5)
+        ttk.Button(frame, text="🟡 AMARILLO", command=lambda: self.send_color("yellow")).grid(row=0, column=1, padx=5)
+        ttk.Button(frame, text="🟢 VERDE", command=lambda: self.send_color("green")).grid(row=1, column=0, padx=5, pady=5)
+        ttk.Button(frame, text="🔵 AZUL", command=lambda: self.send_color("blue")).grid(row=1, column=1, padx=5, pady=5)
 
-        self.status = ttk.Label(top, text="Estado: sin conexión")
-        self.status.pack(side='right')
+        # ---------------- Indicador color ----------------
+        ttk.Label(root, text="Color seleccionado").pack()
+        self.color_canvas = tk.Canvas(root, width=120, height=120)
+        self.color_canvas.pack()
+        self.color_circle = self.color_canvas.create_oval(20, 20, 100, 100, fill="gray")
 
-        body = ttk.Frame(self.root, padding=20)
-        body.pack(fill='both', expand=True)
+        # ---------------- Log ----------------
+        ttk.Label(root, text="Registro").pack(pady=5)
+        self.text = tk.Text(root, height=8)
+        self.text.pack(fill="both", expand=True, padx=10)
 
-        # Avanzar (mantener)
-        self.btn_avanzar = ttk.Button(body, text="Motor A → Adelante")
-        self.btn_avanzar.grid(row=0, column=0, pady=15)
-        self.btn_avanzar.bind("<ButtonPress>", self.cmd_avanzar_press)
-        self.btn_avanzar.bind("<ButtonRelease>", self.cmd_avanzar_release)
+        # ---------------- Teclado ----------------
+        root.bind("<Up>", lambda e: self.worker.send("emp_up"))
+        root.bind("<Down>", lambda e: self.worker.send("emp_down"))
+        root.bind("<Right>", lambda e: self.worker.send("pos_right"))
+        root.bind("<Left>", lambda e: self.worker.send("pos_left"))
 
-        # Retroceder (mantener)
-        self.btn_retro = ttk.Button(body, text="Motor A → Atrás")
-        self.btn_retro.grid(row=1, column=0, pady=15)
-        self.btn_retro.bind("<ButtonPress>", self.cmd_retro_press)
-        self.btn_retro.bind("<ButtonRelease>", self.cmd_retro_release)
+        self.update_logs()
 
-        logf = ttk.Labelframe(self.root, text="Registro")
-        logf.pack(fill='both', expand=True, padx=10, pady=10)
+    def update_status(self, connected):
+        color = "green" if connected else "red"
+        self.status_panel.itemconfig(self.status_circle, fill=color)
 
-        self.log_text = tk.Text(logf, height=7, wrap='word')
-        self.log_text.pack(fill='both', expand=True)
-        self.log_text.configure(state='disabled')
+    def send_color(self, color):
+        self.worker.send(color)
+        self.update_color_indicator(color.upper())
 
-    # -------- Controles del motor --------
+    def update_color_indicator(self, color):
+        colors = {
+            "RED": "red",
+            "YELLOW": "yellow",
+            "GREEN": "green",
+            "BLUE": "blue"
+        }
+        self.color_canvas.itemconfig(self.color_circle, fill=colors.get(color, "gray"))
 
-    def cmd_avanzar_press(self, _):
-        self.worker.send_command("run_forward")
-
-    def cmd_avanzar_release(self, _):
-        self.worker.send_command("stop")
-
-    def cmd_retro_press(self, _):
-        self.worker.send_command("run_backward")
-
-    def cmd_retro_release(self, _):
-        self.worker.send_command("stop")
-
-    # -------- Conexión --------
-
-    def on_connect(self):
-        self.status.configure(text="Estado: conectando…")
-        self.worker.start()
-
-        def wait_ready():
-            if self.worker.running.is_set():
-                self.status.configure(text="Estado: conectado")
-            else:
-                self.root.after(200, wait_ready)
-
-        wait_ready()
-
-    def on_disconnect(self):
-        self.worker.stop()
-        self.status.configure(text="Estado: sin conexión")
-        self._log("Desconectado.")
-
-    # -------- Logs --------
-
-    def _log(self, msg: str):
-        self.log_queue.put(msg)
-
-    def _poll_logs(self):
+    def update_logs(self):
         try:
             while True:
-                msg = self.log_queue.get_nowait()
-                self.log_text.configure(state='normal')
-                self.log_text.insert('end', msg + "\n")
-                self.log_text.see('end')
-                self.log_text.configure(state='disabled')
+                msg = self.logs.get_nowait()
+                self.text.insert("end", msg + "\n")
+                self.text.see("end")
         except Empty:
             pass
+        self.root.after(200, self.update_logs)
 
-        self.root.after(150, self._poll_logs)
 
+# ==================================================
+# MAIN
+# ==================================================
 
 def main():
     root = tk.Tk()
-    app = LegoGUI(root)
+    App(root)
     root.mainloop()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
