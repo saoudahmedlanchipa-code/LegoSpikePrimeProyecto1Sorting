@@ -28,19 +28,21 @@ Está pensado para estudiantes de ingeniería y cursos de robótica educativa.
 
 1. Clonar el repositorio:
 
-   git clone https://github.com/tuusuario/nombre-del-proyecto.git
+   git clone https://github.com/saoudahmedlanchipa-code/LegoSpikePrimeProyecto1Sorting.git
 
 2. Entrar al directorio:
 
-   cd nombre-del-proyecto
+   cd LegoSpikePrimeProyecto1Sorting
 
 3. Instalar dependencias:
 
    pip install pybricksdev
 
-4. Ejecutar el programa:
+   Lo puedes instalar desde github tambien.
 
-   python main.py
+5. Ejecutar el programa:
+
+   python Archivo_Implementado_Tkinter.py
 
 
 
@@ -63,6 +65,9 @@ Está pensado para estudiantes de ingeniería y cursos de robótica educativa.
 - Presionar los botones ROJO, AMARILLO, VERDE o AZUL para ejecutar el movimiento correspondiente.
 
 ### Control por teclado
+
+![pc-keyboard-arrow-keys-linear-icon-isolated-on-white-background-free-vector](https://github.com/user-attachments/assets/df06aae0-7a7b-40c3-93de-7a3964b86914)
+
 
 - Flecha arriba: motor de empuje +180°.
 - Flecha abajo: motor de empuje -180°.
